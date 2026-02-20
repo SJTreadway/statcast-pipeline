@@ -5,6 +5,10 @@
 CREATE DATABASE IF NOT EXISTS BASEBALL;
 CREATE SCHEMA IF NOT EXISTS BASEBALL.STATCAST;
 
+-- Set session context so all subsequent statements resolve correctly
+USE DATABASE BASEBALL;
+USE SCHEMA STATCAST;
+
 -- 2. Create the raw pitches table
 --    Column names mirror pybaseball's statcast() output exactly,
 --    so we can load without any renaming.
