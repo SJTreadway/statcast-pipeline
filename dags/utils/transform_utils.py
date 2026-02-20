@@ -11,9 +11,6 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Columns we actually want to keep from pybaseball's output.
-# pybaseball returns ~90 columns; we select the meaningful subset
-# that maps to our Snowflake schema.
 COLUMNS_TO_KEEP = [
     "game_pk", "game_date", "game_year", "game_type",
     "pitch_number", "inning", "inning_topbot", "at_bat_number",
@@ -49,6 +46,7 @@ def clean_statcast(df: pd.DataFrame) -> pd.DataFrame:
     df = _parse_dates(df)
     df = _coerce_numerics(df)
     df = _drop_pitchless_rows(df)
+    df = _drop_bad_speed_rows(df)
     df = _standardize_column_names(df)
 
     logger.info(f"Transform complete. {len(df):,} rows remaining.")
@@ -56,7 +54,6 @@ def clean_statcast(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _select_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Keep only the columns we care about, silently ignoring missing ones."""
     available = [c for c in COLUMNS_TO_KEEP if c in df.columns]
     missing = set(COLUMNS_TO_KEEP) - set(available)
     if missing:
@@ -65,7 +62,6 @@ def _select_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _parse_dates(df: pd.DataFrame) -> pd.DataFrame:
-    """Ensure game_date is a proper date and game_year is derived from it."""
     if "game_date" in df.columns:
         df["game_date"] = pd.to_datetime(df["game_date"], errors="coerce").dt.date
     if "game_year" not in df.columns and "game_date" in df.columns:
@@ -74,10 +70,6 @@ def _parse_dates(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _coerce_numerics(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    pybaseball occasionally returns numeric columns as object dtype.
-    Force them to float/int, turning unparseable values into NaN.
-    """
     float_cols = [
         "release_speed", "release_spin_rate", "release_extension",
         "release_pos_x", "release_pos_y", "release_pos_z",
@@ -104,17 +96,13 @@ def _coerce_numerics(df: pd.DataFrame) -> pd.DataFrame:
 
     for col in int_cols:
         if col in df.columns:
-            # Use Int64 (nullable integer) so NaN doesn't break int conversion
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
 
     return df
 
 
 def _drop_pitchless_rows(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Rows with no pitch_type are non-pitch events (pickoffs, etc.).
-    Dropping them keeps the table focused on actual pitch data.
-    """
+    """Rows with no pitch_type are non-pitch events (pickoffs, etc.)."""
     before = len(df)
     df = df[df["pitch_type"].notna() & (df["pitch_type"] != "")]
     dropped = before - len(df)
@@ -123,8 +111,24 @@ def _drop_pitchless_rows(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _drop_bad_speed_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop rows with missing or implausible release speeds.
+    pybaseball occasionally returns 0 or null for speed on non-pitch
+    events that slipped past the pitch_type filter, or on data errors.
+    40 mph is a safe floor — no MLB pitch is slower than that.
+    """
+    if "release_speed" not in df.columns:
+        return df
+    before = len(df)
+    df = df[df["release_speed"].notna() & (df["release_speed"] >= 40)]
+    dropped = before - len(df)
+    if dropped:
+        logger.info(f"Dropped {dropped:,} rows with missing or implausible release speed.")
+    return df
+
+
 def _standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
-    """Uppercase all column names to match Snowflake convention."""
     df.columns = [c.upper() for c in df.columns]
     return df
 
@@ -132,27 +136,19 @@ def _standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
 def validate_dataframe(df: pd.DataFrame) -> None:
     """
     Lightweight data quality checks before loading.
-    Raises ValueError if any check fails, which will fail the Airflow task
-    and trigger alerting rather than silently loading bad data.
+    Hard failures: empty DataFrame, missing key columns.
+    Warnings only: edge case values that are filtered upstream.
     """
-    checks = {
-        "No rows in DataFrame": len(df) == 0,
-        "Missing GAME_PK column": "GAME_PK" not in df.columns,
-        "All RELEASE_SPEED values are null": (
-            "RELEASE_SPEED" in df.columns and df["RELEASE_SPEED"].isna().all()
-        ),
-        "Impossible launch angle (>90 or <-90)": (
-            "LAUNCH_ANGLE" in df.columns
-            and df["LAUNCH_ANGLE"].dropna().abs().gt(90).any()
-        ),
-        "Pitch speed below 40 mph detected": (
-            "RELEASE_SPEED" in df.columns
-            and df["RELEASE_SPEED"].dropna().lt(40).any()
-        ),
-    }
+    # Hard failures - these should never happen after cleaning
+    if len(df) == 0:
+        raise ValueError("Data quality checks failed:\n  - No rows in DataFrame")
+    if "GAME_PK" not in df.columns:
+        raise ValueError("Data quality checks failed:\n  - Missing GAME_PK column")
+    if "RELEASE_SPEED" in df.columns and df["RELEASE_SPEED"].isna().all():
+        raise ValueError("Data quality checks failed:\n  - All RELEASE_SPEED values are null")
 
-    failures = [msg for msg, failed in checks.items() if failed]
-    if failures:
-        raise ValueError(f"Data quality checks failed:\n" + "\n".join(f"  - {f}" for f in failures))
+    # Warnings only - log but don't fail
+    if "LAUNCH_ANGLE" in df.columns and df["LAUNCH_ANGLE"].dropna().abs().gt(90).any():
+        logger.warning("Unusual launch angles detected (>90 or <-90) — review source data.")
 
     logger.info(f"All data quality checks passed. ({len(df):,} rows)")

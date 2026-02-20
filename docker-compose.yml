@@ -9,6 +9,8 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+    AIRFLOW__CORE__DAG_RUN_CONF_OVERRIDES_PARAMS: 'true'
     # Snowflake connection - set these in a .env file (never commit credentials)
     AIRFLOW_CONN_SNOWFLAKE_DEFAULT: >-
       snowflake://${SNOWFLAKE_USER}:${SNOWFLAKE_PASSWORD}@${SNOWFLAKE_ACCOUNT}
@@ -16,6 +18,13 @@ x-airflow-common: &airflow-common
       &database=${SNOWFLAKE_DATABASE}
       &schema=${SNOWFLAKE_SCHEMA}
       &role=${SNOWFLAKE_ROLE}
+    SNOWFLAKE_USER: ${SNOWFLAKE_USER}
+    SNOWFLAKE_PASSWORD: ${SNOWFLAKE_PASSWORD}
+    SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT}
+    SNOWFLAKE_WAREHOUSE: ${SNOWFLAKE_WAREHOUSE}
+    SNOWFLAKE_DATABASE: ${SNOWFLAKE_DATABASE}
+    SNOWFLAKE_SCHEMA: ${SNOWFLAKE_SCHEMA}
+    SNOWFLAKE_ROLE: ${SNOWFLAKE_ROLE}
     _PIP_ADDITIONAL_REQUIREMENTS: >-
       pybaseball==2.2.7
       apache-airflow-providers-snowflake==5.3.0
