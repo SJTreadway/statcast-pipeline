@@ -53,6 +53,7 @@ pybaseball.cache.enable()
     start_date=days_ago(1),
     catchup=False,
     default_args={"owner": "steven.treadway", "retries": 2, "retry_delay": timedelta(minutes=10)},
+    max_active_tasks=2,
     tags=["baseball", "statcast", "backfill"],
     params={
         "season": Param(2023, type="integer", description="Season year (2015-2024). Ignored if start_date/end_date are set."),
@@ -91,7 +92,7 @@ def statcast_backfill():
         chunks = []
         cursor = start
         while cursor <= end:
-            chunk_end = min(cursor + timedelta(days=6), end)
+            chunk_end = min(cursor + timedelta(days=2), end)
             chunks.append({
                 "start_date": cursor.strftime("%Y-%m-%d"),
                 "end_date": chunk_end.strftime("%Y-%m-%d"),
